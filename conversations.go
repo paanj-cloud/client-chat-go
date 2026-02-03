@@ -18,7 +18,38 @@ func NewConversationsResource(c *client.PaanjClient) *ConversationsResource {
 }
 
 func (r *ConversationsResource) Create(data map[string]interface{}) (map[string]interface{}, error) {
-	return r.client.GetHttpClient().Request("POST", "/api/v1/conversations", data, false)
+	// Transform participants to members format like JS SDK
+	payload := make(map[string]interface{})
+	for k, v := range data {
+		payload[k] = v
+	}
+
+	// API expects 'members', not 'participants'
+	if participants, ok := data["participants"]; ok {
+		if partArray, ok := participants.([]map[string]string); ok {
+			members := make([]map[string]interface{}, len(partArray))
+			for i, p := range partArray {
+				userId := p["userId"]
+				role := p["role"]
+				if role == "" {
+					role = "member"
+				}
+
+				// Parse userId string to int
+				var userIdInt int
+				fmt.Sscanf(userId, "%d", &userIdInt)
+
+				members[i] = map[string]interface{}{
+					"userId": userIdInt,
+					"role":   role,
+				}
+			}
+			payload["members"] = members
+			delete(payload, "participants")
+		}
+	}
+
+	return r.client.GetHttpClient().Request("POST", "/api/v1/conversations", payload, false)
 }
 
 func (r *ConversationsResource) List(filters map[string]interface{}) (map[string]interface{}, error) {
