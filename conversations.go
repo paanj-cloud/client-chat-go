@@ -118,8 +118,16 @@ func (c *ConversationContext) Participants() *ParticipantsHelper {
 }
 
 func (p *ParticipantsHelper) List() (interface{}, error) {
-	// Assuming GET /conversations/:id/participants
-	return p.context.client.GetHttpClient().Request("GET", fmt.Sprintf("/api/v1/conversations/%s/participants", p.context.ConversationId), nil, false)
+	// JS SDK gets conversation and returns members field
+	conv, err := p.context.resource.Get(p.context.ConversationId)
+	if err != nil {
+		return nil, err
+	}
+	// Return members field if it exists
+	if members, ok := conv["members"]; ok {
+		return members, nil
+	}
+	return []interface{}{}, nil
 }
 
 func (p *ParticipantsHelper) Add(userId string, role string) (map[string]interface{}, error) {
