@@ -1,5 +1,6 @@
 package chatclient
 
+// Test sync: 2026-02-04
 import (
 	"github.com/paanj-cloud/paanj-go/client"
 )
