@@ -53,10 +53,12 @@ func (r *ConversationsResource) Create(data map[string]interface{}) (map[string]
 }
 
 func (r *ConversationsResource) List(filters map[string]interface{}) (map[string]interface{}, error) {
-	// TODO: Handle query params for filters if needed, passing as nil body for now or constructing URL
-	// For simplicity, Go SDK might need a better query param builder in HttpClient later.
-	// Assuming filters are passed as body for now or just ignoring them as proof of concept if GET
-	return r.client.GetHttpClient().Request("GET", "/api/v1/conversations", nil, false)
+	// Uses the user's conversations endpoint
+	userId := r.client.GetUserId()
+	if userId == "" {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+	return r.client.GetHttpClient().Request("GET", fmt.Sprintf("/api/v1/users/%s/conversations", userId), nil, false)
 }
 
 func (r *ConversationsResource) Get(conversationId string) (map[string]interface{}, error) {

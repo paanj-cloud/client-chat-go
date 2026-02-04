@@ -17,7 +17,8 @@ func NewUsersResource(c *client.PaanjClient) *UsersResource {
 }
 
 func (r *UsersResource) GetBlocked() (map[string]interface{}, error) {
-	return r.client.GetHttpClient().Request("GET", "/api/v1/users/blocked", nil, false)
+	// The 'me' in the path is handled by the server based on the auth token
+	return r.client.GetHttpClient().Request("GET", "/api/v1/users/me/blocked", nil, false)
 }
 
 func (r *UsersResource) User(userId string) *UserContext {
