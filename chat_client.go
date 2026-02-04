@@ -1,17 +1,14 @@
 package chatclient
 
 // Test sync: 2026-02-04
-import (
-	"github.com/paanj-cloud/paanj-go/client"
-)
 
 type ChatClient struct {
-	client        *client.PaanjClient
+	client        *client_go.PaanjClient
 	Conversations *ConversationsResource
 	Users         *UsersResource
 }
 
-func NewChatClient(c *client.PaanjClient) *ChatClient {
+func NewChatClient(c *client_go.PaanjClient) *ChatClient {
 	chatClient := &ChatClient{
 		client: c,
 	}
