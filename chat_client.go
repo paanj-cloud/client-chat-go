@@ -6,18 +6,24 @@ import (
 )
 
 type ChatClient struct {
-	client        *client.PaanjClient
 	Conversations *ConversationsResource
 	Users         *UsersResource
 }
 
 func NewChatClient(c *client.PaanjClient) *ChatClient {
-	chatClient := &ChatClient{
-		client: c,
-	}
+	runtime := newPaanjRuntime(c)
 
-	chatClient.Conversations = NewConversationsResource(c)
-	chatClient.Users = NewUsersResource(c)
+	chatClient := &ChatClient{}
+	chatClient.Conversations = newConversationsResource(runtime)
+	chatClient.Users = newUsersResource(runtime)
 
 	return chatClient
+}
+
+func (c *ChatClient) Conversation(conversationId string) *ConversationContext {
+	return c.Conversations.Conversation(conversationId)
+}
+
+func (c *ChatClient) User(userId string) *UserContext {
+	return c.Users.User(userId)
 }

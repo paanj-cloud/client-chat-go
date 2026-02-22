@@ -7,22 +7,31 @@ import (
 )
 
 type UsersResource struct {
-	client *client.PaanjClient
+	runtime chatRuntime
 }
 
 func NewUsersResource(c *client.PaanjClient) *UsersResource {
-	return &UsersResource{
-		client: c,
-	}
+	return newUsersResource(newPaanjRuntime(c))
+}
+
+func newUsersResource(runtime chatRuntime) *UsersResource {
+	return &UsersResource{runtime: runtime}
 }
 
 func (r *UsersResource) GetBlocked() (map[string]interface{}, error) {
-	return r.client.GetHttpClient().Request("GET", "/api/v1/users/blocked", nil, false)
+	return r.runtime.Request("GET", "/api/v1/users/me/blocked", nil, false)
+}
+
+func (r *UsersResource) Block(userId string) (map[string]interface{}, error) {
+	return r.runtime.Request("POST", fmt.Sprintf("/api/v1/users/%s/block", userId), nil, false)
+}
+
+func (r *UsersResource) Unblock(userId string) (map[string]interface{}, error) {
+	return r.runtime.Request("POST", fmt.Sprintf("/api/v1/users/%s/unblock", userId), nil, false)
 }
 
 func (r *UsersResource) User(userId string) *UserContext {
 	return &UserContext{
-		client:   r.client,
 		userId:   userId,
 		resource: r,
 	}
@@ -30,21 +39,22 @@ func (r *UsersResource) User(userId string) *UserContext {
 
 // User Context
 type UserContext struct {
-	client   *client.PaanjClient
 	userId   string
 	resource *UsersResource
 }
 
 func (u *UserContext) Block() (map[string]interface{}, error) {
-	// JS SDK: POST /api/v1/users/:userId/block
-	return u.client.GetHttpClient().Request("POST", fmt.Sprintf("/api/v1/users/%s/block", u.userId), nil, false)
+	return u.resource.Block(u.userId)
 }
 
 func (u *UserContext) Unblock() (map[string]interface{}, error) {
-	// JS SDK: POST /api/v1/users/:userId/unblock
-	return u.client.GetHttpClient().Request("POST", fmt.Sprintf("/api/v1/users/%s/unblock", u.userId), nil, false)
+	return u.resource.Unblock(u.userId)
 }
 
 func (r *UsersResource) OnTokenRefresh(callback func(interface{})) {
-	r.client.On("token.updated", callback)
+	r.runtime.On("token.updated", callback)
+}
+
+func (u *UserContext) OnTokenRefresh(callback func(interface{})) {
+	u.resource.OnTokenRefresh(callback)
 }

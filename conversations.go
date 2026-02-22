@@ -2,19 +2,23 @@ package chatclient
 
 import (
 	"fmt"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/paanj-cloud/paanj-go/client"
 )
 
 type ConversationsResource struct {
-	client *client.PaanjClient
+	runtime chatRuntime
 }
 
 func NewConversationsResource(c *client.PaanjClient) *ConversationsResource {
-	return &ConversationsResource{
-		client: c,
-	}
+	return newConversationsResource(newPaanjRuntime(c))
+}
+
+func newConversationsResource(runtime chatRuntime) *ConversationsResource {
+	return &ConversationsResource{runtime: runtime}
 }
 
 func (r *ConversationsResource) Create(data map[string]interface{}) (map[string]interface{}, error) {
@@ -26,66 +30,66 @@ func (r *ConversationsResource) Create(data map[string]interface{}) (map[string]
 
 	// API expects 'members', not 'participants'
 	if participants, ok := data["participants"]; ok {
-		if partArray, ok := participants.([]map[string]string); ok {
-			members := make([]map[string]interface{}, len(partArray))
-			for i, p := range partArray {
-				userId := p["userId"]
-				role := p["role"]
-				if role == "" {
-					role = "member"
-				}
-
-				// Parse userId string to int
-				var userIdInt int
-				fmt.Sscanf(userId, "%d", &userIdInt)
-
-				members[i] = map[string]interface{}{
-					"userId": userIdInt,
-					"role":   role,
-				}
-			}
+		members := buildMembersPayload(participants)
+		if len(members) > 0 {
 			payload["members"] = members
 			delete(payload, "participants")
 		}
 	}
 
-	return r.client.GetHttpClient().Request("POST", "/api/v1/conversations", payload, false)
+	return r.runtime.Request("POST", "/api/v1/conversations", payload, false)
 }
 
 func (r *ConversationsResource) List(filters map[string]interface{}) (map[string]interface{}, error) {
-	// TODO: Handle query params for filters if needed, passing as nil body for now or constructing URL
-	// For simplicity, Go SDK might need a better query param builder in HttpClient later.
-	// Assuming filters are passed as body for now or just ignoring them as proof of concept if GET
-	return r.client.GetHttpClient().Request("GET", "/api/v1/conversations", nil, false)
+	userID := r.runtime.UserID()
+	if userID == "" {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	path := fmt.Sprintf("/api/v1/users/%s/conversations", userID)
+	query := buildPaginationQuery(filters)
+	if query != "" {
+		path = fmt.Sprintf("%s?%s", path, query)
+	}
+
+	return r.runtime.Request("GET", path, nil, false)
 }
 
 func (r *ConversationsResource) Get(conversationId string) (map[string]interface{}, error) {
-	return r.client.GetHttpClient().Request("GET", fmt.Sprintf("/api/v1/conversations/%s", conversationId), nil, false)
+	return r.runtime.Request("GET", fmt.Sprintf("/api/v1/conversations/%s", conversationId), nil, false)
 }
 
 func (r *ConversationsResource) OnMessage(callback func(interface{})) {
-	r.client.On("message.create", callback)
+	r.runtime.On("message.create", callback)
+}
+
+func (r *ConversationsResource) OnUpdate(conversationId string, callback func(interface{})) {
+	_ = r.runtime.Subscribe(map[string]interface{}{
+		"type":     "subscribe",
+		"resource": "conversation",
+		"id":       conversationId,
+		"events":   []string{"conversation.update"},
+	})
+
+	r.runtime.On(fmt.Sprintf("conversation:%s:conversation.update", conversationId), callback)
 }
 
 // Conversation Context helper (optional, simplified for Go)
 type ConversationContext struct {
-	client         *client.PaanjClient
 	ConversationId string
 	resource       *ConversationsResource
 }
 
 func (r *ConversationsResource) Conversation(conversationId string) *ConversationContext {
 	return &ConversationContext{
-		client:         r.client,
 		ConversationId: conversationId,
 		resource:       r,
 	}
 }
 
-func (c *ConversationContext) Send(content string) (map[string]interface{}, error) {
+func (c *ConversationContext) Send(content string, metadata ...map[string]interface{}) (map[string]interface{}, error) {
 	// JS SDK sends via WebSocket with format: { type: 'new', receiver: conversationId, message: content, hash: ... }
-	timestamp := time.Now().UnixMilli()
-	hash := fmt.Sprintf("%d", timestamp)
+	hash := fmt.Sprintf("%d+%d", time.Now().UnixNano()%1000000, time.Now().UnixMilli())
 
 	payload := map[string]interface{}{
 		"type":     "new",
@@ -93,8 +97,11 @@ func (c *ConversationContext) Send(content string) (map[string]interface{}, erro
 		"message":  content,
 		"hash":     hash,
 	}
+	if len(metadata) > 0 && metadata[0] != nil {
+		payload["metadata"] = metadata[0]
+	}
 
-	err := c.client.GetWebSocket().Send(payload)
+	err := c.resource.runtime.Send(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -103,40 +110,44 @@ func (c *ConversationContext) Send(content string) (map[string]interface{}, erro
 }
 
 func (c *ConversationContext) AddParticipant(userId string, role string) (map[string]interface{}, error) {
-	data := map[string]interface{}{
-		"userId": userId,
-		"role":   role,
+	if role == "" {
+		role = "member"
 	}
-	return c.client.GetHttpClient().Request("POST", fmt.Sprintf("/api/v1/conversations/%s/participants", c.ConversationId), data, false)
+
+	data := map[string]interface{}{
+		"members": []map[string]interface{}{
+			{
+				"userId": normalizeUserID(userId),
+				"role":   role,
+			},
+		},
+	}
+	return c.resource.runtime.Request("POST", fmt.Sprintf("/api/v1/conversations/%s/members", c.ConversationId), data, false)
 }
 
 func (c *ConversationContext) Leave() error {
-	userId := c.client.GetUserId()
+	userId := c.resource.runtime.UserID()
 	if userId == "" {
 		return fmt.Errorf("user not authenticated")
 	}
-	// Note: JS SDK uses DELETE /members with body { userIds: [id] }
-	// Go's http.NewRequest can exist with body for DELETE.
+
 	data := map[string]interface{}{
-		"userIds": []interface{}{userId}, // Assuming API takes ID or maybe int/string depending on backend. JS SDK passed parseInt(userId) so likely int.
-		// If userId is string in client state but int in backend, we need to be careful.
-		// For now assuming backend handles string or we pass as is. The JS SDK does parseInt.
-		// Let's assume the ID is consistent for now or try to pass as is.
+		"userIds": []interface{}{normalizeUserID(userId)},
 	}
-	_, err := c.client.GetHttpClient().Request("DELETE", fmt.Sprintf("/api/v1/conversations/%s/members", c.ConversationId), data, false)
+	_, err := c.resource.runtime.Request("DELETE", fmt.Sprintf("/api/v1/conversations/%s/members", c.ConversationId), data, false)
 	return err
 }
 
+func (c *ConversationContext) Get() (map[string]interface{}, error) {
+	return c.resource.Get(c.ConversationId)
+}
+
 func (c *ConversationContext) OnUpdate(callback func(interface{})) {
-	// JS SDK: this.conversationsResource.onUpdate
-	// We need to listen to generic event and filter? Or specific subject?
-	// JS SDK actually calls conversationsResource.onUpdate which listens to 'conversation.update'.
-	// We'll trust the server emits 'conversation.update' with conversationId in data.
-	c.resource.client.On("conversation.update", func(data interface{}) {
-		// Filter logic would be needed here if the event is global.
-		// Simplified: assumes client app filters or server sends only relevant user events.
-		callback(data)
-	})
+	c.resource.OnUpdate(c.ConversationId, callback)
+}
+
+func (c *ConversationContext) OnMessage(callback func(interface{})) {
+	c.resource.runtime.On(fmt.Sprintf("conversation:%s:message.create", c.ConversationId), callback)
 }
 
 // Participants Helper
@@ -158,6 +169,9 @@ func (p *ParticipantsHelper) List() (interface{}, error) {
 	if members, ok := conv["members"]; ok {
 		return members, nil
 	}
+	if members, ok := conv["participants"]; ok {
+		return members, nil
+	}
 	return []interface{}{}, nil
 }
 
@@ -175,6 +189,165 @@ func (c *ConversationContext) Messages() *MessagesHelper {
 }
 
 func (m *MessagesHelper) List(filters map[string]interface{}) (interface{}, error) {
-	// Construct query string from filters in a real implementation
-	return m.context.client.GetHttpClient().Request("GET", fmt.Sprintf("/api/v1/conversations/%s/messages", m.context.ConversationId), nil, false)
+	path := fmt.Sprintf("/api/v1/conversations/%s/messages", m.context.ConversationId)
+	query := buildMessageQuery(filters)
+	if query != "" {
+		path = fmt.Sprintf("%s?%s", path, query)
+	}
+
+	response, err := m.context.resource.runtime.Request("GET", path, nil, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if response == nil {
+		return []interface{}{}, nil
+	}
+	if messages, ok := response["messages"]; ok {
+		return messages, nil
+	}
+
+	return response, nil
+}
+
+func buildMembersPayload(participants interface{}) []map[string]interface{} {
+	switch partArray := participants.(type) {
+	case []map[string]string:
+		members := make([]map[string]interface{}, 0, len(partArray))
+		for _, p := range partArray {
+			role := p["role"]
+			if role == "" {
+				role = "member"
+			}
+			members = append(members, map[string]interface{}{
+				"userId": normalizeUserID(p["userId"]),
+				"role":   role,
+			})
+		}
+		return members
+	case []map[string]interface{}:
+		members := make([]map[string]interface{}, 0, len(partArray))
+		for _, p := range partArray {
+			userID, ok := p["userId"]
+			if !ok {
+				continue
+			}
+			role := "member"
+			if rawRole, ok := p["role"].(string); ok && rawRole != "" {
+				role = rawRole
+			}
+
+			members = append(members, map[string]interface{}{
+				"userId": normalizeUserID(userID),
+				"role":   role,
+			})
+		}
+		return members
+	case []interface{}:
+		members := make([]map[string]interface{}, 0, len(partArray))
+		for _, raw := range partArray {
+			participant, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			userID, ok := participant["userId"]
+			if !ok {
+				continue
+			}
+			role := "member"
+			if rawRole, ok := participant["role"].(string); ok && rawRole != "" {
+				role = rawRole
+			}
+
+			members = append(members, map[string]interface{}{
+				"userId": normalizeUserID(userID),
+				"role":   role,
+			})
+		}
+		return members
+	default:
+		return nil
+	}
+}
+
+func normalizeUserID(userID interface{}) interface{} {
+	switch v := userID.(type) {
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
+		return v
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	default:
+		return userID
+	}
+}
+
+func buildPaginationQuery(filters map[string]interface{}) string {
+	if len(filters) == 0 {
+		return ""
+	}
+
+	values := url.Values{}
+	if rawLimit, ok := filters["limit"]; ok {
+		appendIntQuery(values, "limit", rawLimit)
+	}
+	if rawOffset, ok := filters["offset"]; ok {
+		appendIntQuery(values, "offset", rawOffset)
+	}
+
+	return values.Encode()
+}
+
+func buildMessageQuery(filters map[string]interface{}) string {
+	if len(filters) == 0 {
+		return ""
+	}
+
+	values := url.Values{}
+	if rawLimit, ok := filters["limit"]; ok {
+		appendIntQuery(values, "limit", rawLimit)
+	}
+	if rawOffset, ok := filters["offset"]; ok {
+		appendIntQuery(values, "offset", rawOffset)
+	}
+	if rawBefore, ok := filters["before"]; ok {
+		appendStringQuery(values, "before", rawBefore)
+	}
+	if rawAfter, ok := filters["after"]; ok {
+		appendStringQuery(values, "after", rawAfter)
+	}
+
+	return values.Encode()
+}
+
+func appendIntQuery(values url.Values, key string, value interface{}) {
+	switch v := value.(type) {
+	case int:
+		values.Set(key, strconv.Itoa(v))
+	case int32:
+		values.Set(key, strconv.Itoa(int(v)))
+	case int64:
+		values.Set(key, strconv.FormatInt(v, 10))
+	case float64:
+		values.Set(key, strconv.Itoa(int(v)))
+	case string:
+		if _, err := strconv.Atoi(v); err == nil {
+			values.Set(key, v)
+		}
+	}
+}
+
+func appendStringQuery(values url.Values, key string, value interface{}) {
+	if str, ok := value.(string); ok && str != "" {
+		values.Set(key, str)
+	}
 }
