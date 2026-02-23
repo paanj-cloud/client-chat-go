@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/paanj-cloud/paanj-go/client"
+	"github.com/paanj-cloud/client-go"
 )
 
 type ConversationsResource struct {

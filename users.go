@@ -3,7 +3,7 @@ package chatclient
 import (
 	"fmt"
 
-	"github.com/paanj-cloud/paanj-go/client"
+	"github.com/paanj-cloud/client-go"
 )
 
 type UsersResource struct {

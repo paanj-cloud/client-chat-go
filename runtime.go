@@ -1,6 +1,6 @@
 package chatclient
 
-import "github.com/paanj-cloud/paanj-go/client"
+import "github.com/paanj-cloud/client-go"
 
 // chatRuntime is a narrow runtime contract used by chat resources.
 // It keeps resource logic decoupled from the concrete core client.
